@@ -2,17 +2,35 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { db } from '../../lib/firebase-admin.js';
 
 // Rate limit: 1 increment per 5 seconds per IP
-const RATE_LIMIT_SECONDS = 5;
+const RATE_LIMIT_SECONDS = 15;
+
+// Verify a Turnstile token with Cloudflare
+async function verifyTurnstile(token: string, secret: string): Promise<boolean> {
+  const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ secret, response: token }),
+  });
+  const data = await res.json();
+  return data.success === true;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Basic bot protection: reject requests with no User-Agent at all
-  const userAgent = req.headers['user-agent'] || '';
-  if (!userAgent.trim()) {
-    return res.status(403).json({ error: 'Forbidden' });
+  // 1. Check Turnstile token
+  const token = req.body.token as string | undefined;
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+
+  if (!token || !secret) {
+    return res.status(400).json({ error: 'Missing token or server secret' });
+  }
+
+  const verify = await verifyTurnstile(token, secret);
+  if (!verify) {
+    return res.status(403).json({ error: 'Turnstile verification failed' });
   }
 
   // Get client IP 
